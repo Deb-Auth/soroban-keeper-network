@@ -44,9 +44,14 @@
 
 require("dotenv").config();
 
+// `rpc` is the Soroban RPC namespace. It was called `SorobanRpc` until
+// @stellar/stellar-sdk v16 dropped that alias — destructuring the old name
+// yields `undefined` rather than an error, so the bot used to get all the way
+// to `new SorobanRpc.Server(...)` before failing with an unhelpful
+// "Cannot read properties of undefined". See test/rpcNamespace.test.js.
 const {
   Keypair,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   Networks,
   BASE_FEE,
@@ -136,7 +141,7 @@ async function validateAndLoadConfig() {
   // After validating the required string values, we can create the server
   // connection and use it to validate the contract's existence on the network.
   const { rpcUrl } = NETWORK_CONFIG[network];
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+  const server = createServer(rpcUrl);
 
   try {
     await server.getContractData(registryContractId);
@@ -284,13 +289,29 @@ const REGISTRY_EVENTS = {
   taskRegistered: [topicSymbol("reg"), topicSymbol("task")],
 };
 
+/**
+ * Builds the Soroban RPC client. Both call sites (startup validation and
+ * main) need identical settings, so they share one factory rather than
+ * repeating the constructor and its options.
+ *
+ * `allowHttp: false` is not configurable on purpose: every endpoint in
+ * NETWORK_CONFIG is https, and a keeper signs transactions, so quietly
+ * permitting plaintext would put a secret key's traffic on the wire.
+ *
+ * Constructing a server performs no network I/O, which is what lets the
+ * regression test in test/rpcNamespace.test.js call this offline.
+ */
+function createServer(rpcUrl) {
+  return new rpc.Server(rpcUrl, { allowHttp: false });
+}
+
 async function simulateAndSend(server, keypair, networkPassphrase, tx) {
   const simResponse = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResponse)) {
+  if (rpc.Api.isSimulationError(simResponse)) {
     throw new Error(`Simulation failed: ${simResponse.error}`);
   }
 
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResponse).build();
+  const preparedTx = rpc.assembleTransaction(tx, simResponse).build();
   preparedTx.sign(keypair);
 
   const sendResponse = await server.sendTransaction(preparedTx);
@@ -301,13 +322,13 @@ async function simulateAndSend(server, keypair, networkPassphrase, tx) {
   // Poll for confirmation
   let getResponse = await server.getTransaction(sendResponse.hash);
   let attempts = 0;
-  while (getResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND && attempts < 30) {
+  while (getResponse.status === rpc.Api.GetTransactionStatus.NOT_FOUND && attempts < 30) {
     await sleep(2000);
     getResponse = await server.getTransaction(sendResponse.hash);
     attempts++;
   }
 
-  if (getResponse.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+  if (getResponse.status === rpc.Api.GetTransactionStatus.SUCCESS) {
     return getResponse;
   } else {
     throw new Error(`Transaction failed with status: ${getResponse.status}`);
@@ -355,7 +376,7 @@ async function readContract(server, sourcePublicKey, networkPassphrase, contract
     .build();
 
   const sim = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(sim)) {
+  if (rpc.Api.isSimulationError(sim)) {
     throw new Error(`Simulation failed: ${sim.error}`);
   }
   return sim.result ? scValToNative(sim.result.retval) : null;
@@ -742,7 +763,7 @@ async function main() {
 
   const { rpcUrl, networkPassphrase } = NETWORK_CONFIG[CONFIG.network];
   const keypair = Keypair.fromSecret(CONFIG.secretKey);
-  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+  const server = createServer(rpcUrl);
 
   console.log("");
   console.log("Soroban Keeper Network — Keeper Bot v0.1.0          ");
@@ -762,7 +783,11 @@ async function main() {
   // Verify connectivity
   try {
     const health = await server.getHealth();
-    console.log(`RPC healthy — ledger ${health.ledger}`);
+    // `latestLedger`, not `ledger` — the same v16 API drift as the `rpc`
+    // rename above. This one degraded quietly to "ledger undefined" instead
+    // of throwing, so the startup banner has been printing a hole where the
+    // one number that proves RPC is live should be.
+    console.log(`RPC healthy — ledger ${health.latestLedger}`);
   } catch (e) {
     console.error(`RPC unreachable at ${rpcUrl}: ${e.message}`);
     process.exit(1);
@@ -842,6 +867,7 @@ function sleep(ms) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 module.exports = {
+  createServer,
   isPermanentError,
   withRetry,
   fetchPendingTasks,

@@ -16,6 +16,7 @@
 // type-checks and then throws "is not a function" at runtime.
 import "./methods/cancelTask";
 import "./methods/claimTask";
+import "./methods/expireTask";
 import "./methods/increaseReward";
 import "./methods/registerTask";
 
@@ -33,5 +34,6 @@ export {
 
 export type { CancelTaskOutcome, CancelTaskParams } from "./methods/cancelTask";
 export type { ClaimTaskOutcome, ClaimTaskParams } from "./methods/claimTask";
+export type { ExpireTaskParams } from "./methods/expireTask";
 export type { IncreaseRewardParams } from "./methods/increaseReward";
 export type { RegisterTaskParams } from "./methods/registerTask";

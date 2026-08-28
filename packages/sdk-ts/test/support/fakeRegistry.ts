@@ -90,6 +90,8 @@ export class FakeRegistry {
         return this.cancelTask(native[0] as string, native[1] as bigint);
       case "claim_task":
         return this.claimTask(native[0] as string, native[1] as bigint);
+      case "expire_task":
+        return this.expireTask(native[0] as bigint);
       default:
         throw new Error(`FakeRegistry does not model ${method}`);
     }
@@ -124,6 +126,18 @@ export class FakeRegistry {
       throw contractError(KeeperError.InvalidTaskStatus);
     }
     task.status = TaskStatus.Cancelled;
+    return voidResponse();
+  }
+
+  private expireTask(id: bigint): rpc.Api.GetSuccessfulTransactionResponse {
+    const task = this.task(id);
+    if (task.status !== TaskStatus.Pending && task.status !== TaskStatus.Claimed) {
+      throw contractError(KeeperError.InvalidTaskStatus);
+    }
+    if (this.timestamp < task.deadline) {
+      throw contractError(KeeperError.DeadlineNotPassed);
+    }
+    task.status = TaskStatus.Expired;
     return voidResponse();
   }
 

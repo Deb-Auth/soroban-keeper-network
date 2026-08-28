@@ -14,6 +14,7 @@
 // prototype and augments its type. Keep this list alphabetical, and keep
 // it complete — a method module that is never imported is a method that
 // type-checks and then throws "is not a function" at runtime.
+import "./methods/cancelTask";
 import "./methods/claimTask";
 import "./methods/increaseReward";
 import "./methods/registerTask";
@@ -30,6 +31,7 @@ export {
   MIN_TTL_LEDGERS,
 } from "./constants";
 
+export type { CancelTaskOutcome, CancelTaskParams } from "./methods/cancelTask";
 export type { ClaimTaskOutcome, ClaimTaskParams } from "./methods/claimTask";
 export type { IncreaseRewardParams } from "./methods/increaseReward";
 export type { RegisterTaskParams } from "./methods/registerTask";

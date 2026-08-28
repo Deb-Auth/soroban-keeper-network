@@ -86,6 +86,8 @@ export class FakeRegistry {
   invoke(method: string, args: xdr.ScVal[]): rpc.Api.GetSuccessfulTransactionResponse {
     const native = args.map((arg) => scValToNative(arg));
     switch (method) {
+      case "cancel_task":
+        return this.cancelTask(native[0] as string, native[1] as bigint);
       case "claim_task":
         return this.claimTask(native[0] as string, native[1] as bigint);
       default:
@@ -107,6 +109,21 @@ export class FakeRegistry {
     task.status = TaskStatus.Claimed;
     task.claimer = keeper;
     task.claimLedger = this.ledgerSequence;
+    return voidResponse();
+  }
+
+  private cancelTask(owner: string, id: bigint): rpc.Api.GetSuccessfulTransactionResponse {
+    const task = this.task(id);
+    if (task.owner !== owner) {
+      throw contractError(KeeperError.NotTaskOwner);
+    }
+    if (task.status === TaskStatus.Claimed && !this.lockExpired(task)) {
+      throw contractError(KeeperError.LockPeriodActive);
+    }
+    if (task.status !== TaskStatus.Pending && task.status !== TaskStatus.Claimed) {
+      throw contractError(KeeperError.InvalidTaskStatus);
+    }
+    task.status = TaskStatus.Cancelled;
     return voidResponse();
   }
 

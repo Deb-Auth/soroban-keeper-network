@@ -4,7 +4,7 @@
  *
  * This module is the package's only supported entry point. Importing it
  * loads every method module, which is what attaches the typed
- * `client.registerTask()` / `client.increaseReward()` / … methods to
+ * `client.registerTask()` / `client.claimTask()` / … methods to
  * `KeeperRegistryClient` (see `client.ts` for why they are organised that
  * way). Deep-importing `./client` on its own gets you a client with none of
  * them.
@@ -14,6 +14,7 @@
 // prototype and augments its type. Keep this list alphabetical, and keep
 // it complete — a method module that is never imported is a method that
 // type-checks and then throws "is not a function" at runtime.
+import "./methods/claimTask";
 import "./methods/increaseReward";
 import "./methods/registerTask";
 
@@ -29,5 +30,6 @@ export {
   MIN_TTL_LEDGERS,
 } from "./constants";
 
+export type { ClaimTaskOutcome, ClaimTaskParams } from "./methods/claimTask";
 export type { IncreaseRewardParams } from "./methods/increaseReward";
 export type { RegisterTaskParams } from "./methods/registerTask";

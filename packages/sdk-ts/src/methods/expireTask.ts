@@ -1,53 +1,63 @@
 /**
- * `client.expireTask` — typed wrapper around the contract's permissionless
- * `expire_task`. See `contracts/keeper-registry/src/task.rs` for the
- * on-chain implementation this mirrors.
+ * `expire_task` -- once a task's deadline has passed without execution,
+ * anyone may unwind it and return the escrowed reward to its owner.
+ *
+ * Mirrors `contracts/keeper-registry/src/task.rs::expire_task`.
  */
 
-import { nativeToScVal } from "@stellar/stellar-sdk";
-import { KeeperRegistryClient } from "../client";
+import type { ContractCaller, SignedCallOptions } from "../core/caller.js";
+import type { IntegerInput } from "../core/scval.js";
+import { u64Arg } from "../core/scval.js";
 
-export interface ExpireTaskParams {
+export interface ExpireTaskParams extends SignedCallOptions {
   /** Id of the task to expire. */
-  taskId: bigint | number;
+  taskId: IntegerInput;
   /**
-   * Transaction source account. Needed only to build and submit the
-   * transaction — unlike every other mutating method in this SDK,
-   * `expire_task` requires no authorization relationship between `caller`
-   * and the task at all, and the contract does not even take `caller` as
-   * an argument (there is nothing for it to `require_auth()` against).
+   * `G...` account that pays for and sources the transaction.
    *
-   * In this SDK, a client is bound to one signer for its lifetime (see
-   * `client.ts`), so `caller` must equal this client's configured signer;
-   * it exists on this params object to keep that "any account" contract
-   * semantics visible in the method's own type signature rather than
-   * buried in prose. Calling as an address unrelated to a task's owner or
-   * claimer means constructing the client with that address's signer —
-   * there is no owner/keeper check to satisfy either way.
+   * Needed only to build and submit it. Alone among this SDK's mutating
+   * methods, `expire_task` requires no authorization relationship between the
+   * caller and the task -- the contract does not even take a caller argument,
+   * so there is nothing for it to `require_auth()` against. The field is here,
+   * rather than defaulted out of sight, to keep that "any account" semantics
+   * visible in the signature: whoever sources the transaction is a fee payer
+   * and nothing more.
+   *
+   * It must be the address the signer for this call signs as -- the client's
+   * default signer, or a per-call {@link SignedCallOptions.signer}.
    */
   caller: string;
 }
 
-declare module "../client" {
-  interface KeeperRegistryClient {
-    /**
-     * Expires `taskId` once its deadline has passed, refunding the
-     * escrowed reward to the task's owner.
-     *
-     * Callable by any account — this is deliberate: it lets a stuck task
-     * always be unwound and its funds recovered, even by a party with no
-     * relationship to the task, such as a keeper bot expiring stale tasks
-     * as a courtesy while scanning.
-     */
-    expireTask(params: ExpireTaskParams): Promise<void>;
-  }
-}
-
-KeeperRegistryClient.prototype.expireTask = async function (
-  this: KeeperRegistryClient,
-  params: ExpireTaskParams
+/**
+ * Expires `taskId`, refunding the escrowed reward to the task's owner.
+ *
+ * Callable by any account, which is deliberate: it means a stuck task can
+ * always be unwound and its funds recovered, even by a party with no
+ * relationship to it -- a keeper bot clearing stale tasks as a courtesy while
+ * it scans, say.
+ *
+ * Rejects with a `KeeperContractError` carrying:
+ * - `DeadlineNotPassed` when the deadline is still in the future,
+ * - `InvalidTaskStatus` when the task has already been executed, cancelled,
+ *   or expired,
+ * - `TaskNotFound` when no task has that id.
+ *
+ * None of these is returned as a status: unlike a claim race, there is no
+ * routine outcome here a caller would want to branch on rather than handle.
+ */
+export async function expireTask(
+  caller: ContractCaller,
+  params: ExpireTaskParams,
 ): Promise<void> {
-  this.requireSignerIs(params.caller, "caller");
+  const { taskId, caller: source, signer } = params;
 
-  await this.invokeContract("expire_task", [nativeToScVal(BigInt(params.taskId), { type: "u64" })]);
-};
+  // Only the task id goes on the wire; `caller` is the transaction source and
+  // must not leak into the invocation, or the call would not match the ABI.
+  await caller.invoke<void>({
+    method: "expire_task",
+    source,
+    args: [u64Arg(taskId, "taskId")],
+    ...(signer ? { signer } : {}),
+  });
+}

@@ -1,52 +1,57 @@
 /**
- * `client.increaseReward` — typed wrapper around the contract's
- * `increase_reward`. See `contracts/keeper-registry/src/task.rs` for the
- * on-chain implementation this mirrors.
+ * `increase_reward` -- the owner tops up the bounty on a task that has not
+ * finished yet, to attract keepers. The extra amount is escrowed immediately.
+ *
+ * Mirrors `contracts/keeper-registry/src/task.rs::increase_reward`.
  */
 
-import { nativeToScVal } from "@stellar/stellar-sdk";
-import { KeeperRegistryClient } from "../client";
-import { KeeperError, KeeperSdkError } from "../errors";
+import type { ContractCaller, SignedCallOptions } from "../core/caller.js";
+import type { IntegerInput } from "../core/scval.js";
+import { addressArg, i128Arg, toBigInt, u64Arg } from "../core/scval.js";
+import { KeeperContractError, KeeperErrorCode } from "../errors.js";
 
-export interface IncreaseRewardParams {
-  /** Address that registered the task; must be this client's configured signer. */
+export interface IncreaseRewardParams extends SignedCallOptions {
+  /** `G...` address that registered the task. Must authorize the call. */
   owner: string;
   /** Id of the task to top up. */
-  taskId: bigint | number;
-  /** Additional amount to escrow, in the reward token's smallest unit. Must be positive. */
-  additional: bigint;
+  taskId: IntegerInput;
+  /** Amount to add to the escrowed reward, in the reward token's own units. */
+  additional: IntegerInput;
 }
 
-declare module "../client" {
-  interface KeeperRegistryClient {
-    /**
-     * Tops up the bounty on a task that has not yet finished (`Pending` or
-     * `Claimed`) by escrowing `additional` from `owner`. Signs and submits
-     * with this client's configured signer, which must be `owner`.
-     *
-     * @throws {KeeperSdkError} client-side, before any transaction is
-     *   built, when `additional` is non-positive — the same check
-     *   `increase_reward` performs on-chain. A task in the wrong status, or
-     *   owned by someone else, is still only caught by the contract, since
-     *   this client cannot cheaply know a task's current state without an
-     *   extra read.
-     */
-    increaseReward(params: IncreaseRewardParams): Promise<void>;
-  }
-}
-
-KeeperRegistryClient.prototype.increaseReward = async function (
-  this: KeeperRegistryClient,
-  params: IncreaseRewardParams
+/**
+ * Adds `additional` to a task's escrowed reward.
+ *
+ * Only the owner of a `Pending` or `Claimed` task may do this. A non-positive
+ * amount is refused locally with the contract's own `InvalidReward`; the
+ * remaining preconditions -- ownership and status -- are left to the contract,
+ * because this client cannot know a task's current state without an extra read
+ * that would be stale by the time the call landed anyway.
+ *
+ * Rejects with a `KeeperContractError` carrying, among others:
+ * - `InvalidReward` when `additional` is non-positive,
+ * - `NotTaskOwner` when the signer did not register the task,
+ * - `InvalidTaskStatus` when the task is already executed, cancelled, or expired,
+ * - `TaskNotFound` when no task has that id.
+ */
+export async function increaseReward(
+  caller: ContractCaller,
+  params: IncreaseRewardParams,
 ): Promise<void> {
-  this.requireSignerIs(params.owner, "owner");
-  if (params.additional <= 0n) {
-    throw new KeeperSdkError("additional must be positive", KeeperError.InvalidReward);
+  const { owner, taskId, additional, signer } = params;
+
+  if (toBigInt(additional, "additional") <= 0n) {
+    throw new KeeperContractError(
+      KeeperErrorCode.InvalidReward,
+      `additional must be positive, got ${additional}. No transaction was built.`,
+      { local: true },
+    );
   }
 
-  await this.invokeContract("increase_reward", [
-    nativeToScVal(params.owner, { type: "address" }),
-    nativeToScVal(BigInt(params.taskId), { type: "u64" }),
-    nativeToScVal(params.additional, { type: "i128" }),
-  ]);
-};
+  await caller.invoke<void>({
+    method: "increase_reward",
+    source: owner,
+    args: [addressArg(owner, "owner"), u64Arg(taskId, "taskId"), i128Arg(additional, "additional")],
+    ...(signer ? { signer } : {}),
+  });
+}

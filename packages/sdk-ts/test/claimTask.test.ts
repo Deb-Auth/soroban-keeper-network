@@ -1,104 +1,109 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { Keypair, scValToNative } from "@stellar/stellar-sdk";
-import { KeeperError, KeeperSdkError, TaskStatus } from "../src/index";
-import { FakeRegistry, clientFor } from "./support/fakeRegistry";
-import { someOtherAddress, stubClient } from "./support/stubClient";
+import { Keypair } from "@stellar/stellar-sdk";
+import { describe, expect, it } from "vitest";
 
-test("claimTask claims a Pending task and encodes every contract argument", async () => {
-  const registry = new FakeRegistry();
-  const taskId = registry.seedTask();
-  const { client, address } = clientFor(registry);
+import { keypairSigner } from "../src/client.js";
+import { KeeperErrorCode, isKeeperError } from "../src/errors.js";
+import { TaskStatus } from "../src/types.js";
+import { KEEPER, KEEPER_KEYPAIR, testClient } from "./support/client.js";
+import { FakeRegistry, clientFor } from "./support/fakeRegistry.js";
 
-  const result = await client.claimTask({ keeper: address, taskId });
+describe("client.claimTask", () => {
+  it("claims a Pending task", async () => {
+    const registry = new FakeRegistry();
+    const taskId = registry.seedTask();
+    const { client, address } = clientFor(registry);
 
-  assert.deepEqual(result, { status: "claimed" });
-  assert.equal(registry.task(taskId).status, TaskStatus.Claimed);
-  assert.equal(registry.task(taskId).claimer, address);
-});
+    await expect(client.claimTask({ keeper: address, taskId })).resolves.toEqual({
+      status: "claimed",
+    });
+    expect(registry.task(taskId).status).toBe(TaskStatus.Claimed);
+    expect(registry.task(taskId).claimer).toBe(address);
+  });
 
-test("claimTask reports LockPeriodActive as a typed outcome rather than throwing", async () => {
-  // Losing a claim race is routine for a keeper bot, not exceptional: it
-  // should move on to the next task and come back once the lock lapses.
-  const registry = new FakeRegistry();
-  const taskId = registry.seedTask();
-  const firstKeeper = clientFor(registry);
-  await firstKeeper.client.claimTask({ keeper: firstKeeper.address, taskId });
+  it("reports LockPeriodActive as a typed outcome rather than throwing", async () => {
+    // Losing a claim race is routine for a keeper bot, not exceptional: it
+    // should move on to the next task and come back once the lock lapses.
+    const registry = new FakeRegistry();
+    const taskId = registry.seedTask();
+    const first = clientFor(registry);
+    await first.client.claimTask({ keeper: first.address, taskId });
 
-  const secondKeeper = clientFor(registry);
-  const result = await secondKeeper.client.claimTask({ keeper: secondKeeper.address, taskId });
+    const second = clientFor(registry);
 
-  assert.deepEqual(result, { status: "lock_period_active" });
-  assert.equal(registry.task(taskId).claimer, firstKeeper.address);
-});
+    await expect(second.client.claimTask({ keeper: second.address, taskId })).resolves.toEqual({
+      status: "lock_period_active",
+    });
+    expect(registry.task(taskId).claimer).toBe(first.address);
+  });
 
-test("claimTask succeeds on a re-claim once the previous keeper's lock has lapsed", async () => {
-  const registry = new FakeRegistry();
-  const taskId = registry.seedTask();
-  const firstKeeper = clientFor(registry);
-  await firstKeeper.client.claimTask({ keeper: firstKeeper.address, taskId });
-  registry.lapseLockOf(taskId);
+  it("succeeds on a re-claim once the previous keeper's lock has lapsed", async () => {
+    const registry = new FakeRegistry();
+    const taskId = registry.seedTask();
+    const first = clientFor(registry);
+    await first.client.claimTask({ keeper: first.address, taskId });
+    registry.lapseLockOf(taskId);
 
-  const secondKeeper = clientFor(registry);
-  const result = await secondKeeper.client.claimTask({ keeper: secondKeeper.address, taskId });
+    const second = clientFor(registry);
 
-  assert.deepEqual(result, { status: "claimed" });
-  assert.equal(registry.task(taskId).claimer, secondKeeper.address);
-});
+    await expect(second.client.claimTask({ keeper: second.address, taskId })).resolves.toEqual({
+      status: "claimed",
+    });
+    expect(registry.task(taskId).claimer).toBe(second.address);
+  });
 
-test("claimTask reports DeadlinePassed distinctly from LockPeriodActive", async () => {
-  // The distinction is the whole point: lock_period_active means keep
-  // scanning, deadline_passed means this task is dead — stop retrying it.
-  const registry = new FakeRegistry();
-  const taskId = registry.seedTask();
-  registry.passDeadlineOf(taskId);
-  const { client, address } = clientFor(registry);
+  it("reports DeadlinePassed distinctly from LockPeriodActive", async () => {
+    // The distinction is the whole point: lock_period_active means keep
+    // scanning, deadline_passed means this task is dead -- stop retrying it.
+    const registry = new FakeRegistry();
+    const taskId = registry.seedTask();
+    registry.passDeadlineOf(taskId);
+    const { client, address } = clientFor(registry);
 
-  const result = await client.claimTask({ keeper: address, taskId });
+    await expect(client.claimTask({ keeper: address, taskId })).resolves.toEqual({
+      status: "deadline_passed",
+    });
+  });
 
-  assert.deepEqual(result, { status: "deadline_passed" });
-});
+  it("still throws for failures outside normal claim racing", async () => {
+    const registry = new FakeRegistry();
+    const { client, address } = clientFor(registry);
 
-test("claimTask still throws for failures outside normal claim racing", async () => {
-  const registry = new FakeRegistry();
-  const { client, address } = clientFor(registry);
+    const rejection = await client
+      .claimTask({ keeper: address, taskId: 404 })
+      .catch((error: unknown) => error);
 
-  await assert.rejects(
-    () => client.claimTask({ keeper: address, taskId: 404 }),
-    (err: unknown) => err instanceof KeeperSdkError && err.code === KeeperError.TaskNotFound
-  );
-});
+    expect(isKeeperError(rejection, KeeperErrorCode.TaskNotFound)).toBe(true);
+  });
 
-test("claimTask sends the keeper address and task id the contract expects", async () => {
-  const { client, calls, address } = stubClient();
+  it("is permissionless -- any account may claim, not just the owner", async () => {
+    const registry = new FakeRegistry();
+    const owner = Keypair.random().publicKey();
+    const taskId = registry.seedTask({ owner });
+    const stranger = clientFor(registry);
 
-  await client.claimTask({ keeper: address, taskId: 9 });
+    await expect(stranger.client.claimTask({ keeper: stranger.address, taskId })).resolves.toEqual({
+      status: "claimed",
+    });
+    expect(stranger.address).not.toBe(owner);
+  });
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.method, "claim_task");
-  const args = calls[0]!.args.map((arg) => scValToNative(arg));
-  assert.equal(args[0], address);
-  assert.equal(args[1], 9n);
-});
+  it("sends the keeper address and task id the contract expects", async () => {
+    const { client, rpc } = testClient();
 
-test("claimTask rejects a keeper that is not the client's signer", async () => {
-  const { client, calls } = stubClient();
+    await client.claimTask({ keeper: KEEPER, taskId: 9, signer: keypairSigner(KEEPER_KEYPAIR) });
 
-  await assert.rejects(
-    () => client.claimTask({ keeper: someOtherAddress(), taskId: 9 }),
-    (err: unknown) => err instanceof KeeperSdkError && /is not this client's signer/.test(err.message)
-  );
-  assert.equal(calls.length, 0);
-});
+    expect(rpc.onlyCall.method).toBe("claim_task");
+    expect(rpc.onlyCall.args[0]).toBe(KEEPER);
+    expect(rpc.onlyCall.args[1]).toBe(9n);
+    expect(rpc.onlyCall.rawArgs[1]?.switch().name).toBe("scvU64");
+  });
 
-test("claimTask is permissionless — any account may claim, not just the owner", async () => {
-  const registry = new FakeRegistry();
-  const owner = Keypair.random().publicKey();
-  const taskId = registry.seedTask({ owner });
-  const stranger = clientFor(registry);
+  it("refuses to sign for a keeper the client has no signer for", async () => {
+    const { client, rpc } = testClient();
 
-  const result = await stranger.client.claimTask({ keeper: stranger.address, taskId });
-
-  assert.deepEqual(result, { status: "claimed" });
-  assert.notEqual(stranger.address, owner);
+    await expect(client.claimTask({ keeper: KEEPER, taskId: 9 })).rejects.toThrow(
+      /must be authorized by/,
+    );
+    expect(rpc.calls).toHaveLength(0);
+  });
 });

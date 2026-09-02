@@ -1,105 +1,112 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { Keypair, scValToNative } from "@stellar/stellar-sdk";
-import { KeeperError, KeeperSdkError, TaskStatus } from "../src/index";
-import { FakeRegistry, clientFor } from "./support/fakeRegistry";
-import { someOtherAddress, stubClient } from "./support/stubClient";
+import { Keypair } from "@stellar/stellar-sdk";
+import { describe, expect, it } from "vitest";
 
-test("cancelTask cancels a Pending task", async () => {
-  const registry = new FakeRegistry();
-  const owner = Keypair.random();
-  const taskId = registry.seedTask({ owner: owner.publicKey() });
-  const { client, address } = clientFor(registry, owner);
+import { keypairSigner } from "../src/client.js";
+import { KeeperErrorCode, isKeeperError } from "../src/errors.js";
+import { TaskStatus } from "../src/types.js";
+import { OWNER, OWNER_KEYPAIR, testClient } from "./support/client.js";
+import { FakeRegistry, clientFor } from "./support/fakeRegistry.js";
 
-  const result = await client.cancelTask({ owner: address, taskId });
+describe("client.cancelTask", () => {
+  it("cancels a Pending task", async () => {
+    const registry = new FakeRegistry();
+    const owner = Keypair.random();
+    const taskId = registry.seedTask({ owner: owner.publicKey() });
+    const { client, address } = clientFor(registry, owner);
 
-  assert.deepEqual(result, { status: "cancelled" });
-  assert.equal(registry.task(taskId).status, TaskStatus.Cancelled);
-});
-
-test("cancelTask cancels a Claimed task whose lock has lapsed", async () => {
-  // The second accepted precondition, added after the contract widened
-  // cancel_task beyond Pending-only. An SDK encoding the older rule would
-  // wrongly refuse this.
-  const registry = new FakeRegistry();
-  const owner = Keypair.random();
-  const taskId = registry.seedTask({ owner: owner.publicKey() });
-
-  const keeper = clientFor(registry);
-  await keeper.client.claimTask({ keeper: keeper.address, taskId });
-  assert.equal(registry.task(taskId).status, TaskStatus.Claimed);
-  registry.lapseLockOf(taskId);
-
-  const { client, address } = clientFor(registry, owner);
-  const result = await client.cancelTask({ owner: address, taskId });
-
-  assert.deepEqual(result, { status: "cancelled" });
-  assert.equal(registry.task(taskId).status, TaskStatus.Cancelled);
-});
-
-test("cancelTask reports LockPeriodActive for a still-locked Claimed task", async () => {
-  // Retryable: the same call succeeds once the lock lapses, which the
-  // following assertion confirms rather than assuming.
-  const registry = new FakeRegistry();
-  const owner = Keypair.random();
-  const taskId = registry.seedTask({ owner: owner.publicKey() });
-
-  const keeper = clientFor(registry);
-  await keeper.client.claimTask({ keeper: keeper.address, taskId });
-
-  const { client, address } = clientFor(registry, owner);
-  assert.deepEqual(await client.cancelTask({ owner: address, taskId }), {
-    status: "lock_period_active",
+    await expect(client.cancelTask({ owner: address, taskId })).resolves.toEqual({
+      status: "cancelled",
+    });
+    expect(registry.task(taskId).status).toBe(TaskStatus.Cancelled);
   });
 
-  registry.lapseLockOf(taskId);
-  assert.deepEqual(await client.cancelTask({ owner: address, taskId }), { status: "cancelled" });
-});
+  it("cancels a Claimed task whose lock has lapsed", async () => {
+    // The second accepted precondition, added after the contract widened
+    // cancel_task beyond Pending-only. An SDK encoding the older rule would
+    // wrongly refuse this.
+    const registry = new FakeRegistry();
+    const owner = Keypair.random();
+    const taskId = registry.seedTask({ owner: owner.publicKey() });
 
-test("cancelTask reports InvalidTaskStatus distinctly from LockPeriodActive", async () => {
-  // Not retryable: a task that has already left Pending/Claimed can never be
-  // cancelled, which is why this is a different outcome from a live lock.
-  const registry = new FakeRegistry();
-  const owner = Keypair.random();
-  const { client, address } = clientFor(registry, owner);
+    const keeper = clientFor(registry);
+    await keeper.client.claimTask({ keeper: keeper.address, taskId });
+    expect(registry.task(taskId).status).toBe(TaskStatus.Claimed);
+    registry.lapseLockOf(taskId);
 
-  for (const status of [TaskStatus.Executed, TaskStatus.Cancelled, TaskStatus.Expired]) {
-    const taskId = registry.seedTask({ owner: owner.publicKey(), status });
-    assert.deepEqual(await client.cancelTask({ owner: address, taskId }), {
-      status: "invalid_task_status",
+    const { client, address } = clientFor(registry, owner);
+
+    await expect(client.cancelTask({ owner: address, taskId })).resolves.toEqual({
+      status: "cancelled",
     });
-  }
-});
+    expect(registry.task(taskId).status).toBe(TaskStatus.Cancelled);
+  });
 
-test("cancelTask still throws when the caller is not the task's owner", async () => {
-  const registry = new FakeRegistry();
-  const taskId = registry.seedTask({ owner: Keypair.random().publicKey() });
-  const stranger = clientFor(registry);
+  it("reports LockPeriodActive for a still-locked Claimed task", async () => {
+    // Retryable: the same call succeeds once the lock lapses, which the
+    // second assertion confirms rather than assuming.
+    const registry = new FakeRegistry();
+    const owner = Keypair.random();
+    const taskId = registry.seedTask({ owner: owner.publicKey() });
 
-  await assert.rejects(
-    () => stranger.client.cancelTask({ owner: stranger.address, taskId }),
-    (err: unknown) => err instanceof KeeperSdkError && err.code === KeeperError.NotTaskOwner
-  );
-});
+    const keeper = clientFor(registry);
+    await keeper.client.claimTask({ keeper: keeper.address, taskId });
 
-test("cancelTask sends the owner address and task id the contract expects", async () => {
-  const { client, calls, address } = stubClient();
+    const { client, address } = clientFor(registry, owner);
+    await expect(client.cancelTask({ owner: address, taskId })).resolves.toEqual({
+      status: "lock_period_active",
+    });
 
-  await client.cancelTask({ owner: address, taskId: 5 });
+    registry.lapseLockOf(taskId);
+    await expect(client.cancelTask({ owner: address, taskId })).resolves.toEqual({
+      status: "cancelled",
+    });
+  });
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.method, "cancel_task");
-  const args = calls[0]!.args.map((arg) => scValToNative(arg));
-  assert.equal(args[0], address);
-  assert.equal(args[1], 5n);
-});
+  it("reports InvalidTaskStatus distinctly from LockPeriodActive", async () => {
+    // Not retryable: a task that has already left Pending/Claimed can never be
+    // cancelled, which is why this is a different outcome from a live lock.
+    const registry = new FakeRegistry();
+    const owner = Keypair.random();
+    const { client, address } = clientFor(registry, owner);
 
-test("cancelTask rejects an owner that is not the client's signer", async () => {
-  const { client, calls } = stubClient();
+    for (const status of [TaskStatus.Executed, TaskStatus.Cancelled, TaskStatus.Expired]) {
+      const taskId = registry.seedTask({ owner: owner.publicKey(), status });
 
-  await assert.rejects(
-    () => client.cancelTask({ owner: someOtherAddress(), taskId: 5 }),
-    (err: unknown) => err instanceof KeeperSdkError && /is not this client's signer/.test(err.message)
-  );
-  assert.equal(calls.length, 0);
+      await expect(client.cancelTask({ owner: address, taskId })).resolves.toEqual({
+        status: "invalid_task_status",
+      });
+    }
+  });
+
+  it("still throws when the caller is not the task's owner", async () => {
+    const registry = new FakeRegistry();
+    const taskId = registry.seedTask({ owner: Keypair.random().publicKey() });
+    const stranger = clientFor(registry);
+
+    const rejection = await stranger.client
+      .cancelTask({ owner: stranger.address, taskId })
+      .catch((error: unknown) => error);
+
+    expect(isKeeperError(rejection, KeeperErrorCode.NotTaskOwner)).toBe(true);
+  });
+
+  it("sends the owner address and task id the contract expects", async () => {
+    const { client, rpc } = testClient();
+
+    await client.cancelTask({ owner: OWNER, taskId: 5, signer: keypairSigner(OWNER_KEYPAIR) });
+
+    expect(rpc.onlyCall.method).toBe("cancel_task");
+    expect(rpc.onlyCall.args[0]).toBe(OWNER);
+    expect(rpc.onlyCall.args[1]).toBe(5n);
+    expect(rpc.onlyCall.rawArgs[1]?.switch().name).toBe("scvU64");
+  });
+
+  it("refuses to sign for an owner the client has no signer for", async () => {
+    const { client, rpc } = testClient({}, { signer: keypairSigner(Keypair.random()) });
+
+    await expect(client.cancelTask({ owner: OWNER, taskId: 5 })).rejects.toThrow(
+      /must be authorized by/,
+    );
+    expect(rpc.calls).toHaveLength(0);
+  });
 });

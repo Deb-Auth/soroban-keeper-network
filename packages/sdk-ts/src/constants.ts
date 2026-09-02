@@ -1,25 +1,50 @@
 /**
- * Protocol bounds mirrored from `contracts/keeper-registry/src/constants.rs`.
+ * The SDK's copy of the contract constants it enforces client-side.
  *
- * These exist so the SDK's client-side pre-flight checks can reject an input
- * the contract would reject anyway, without a round trip. They are a copy of
- * the contract's values, not the source of truth: the contract's own
- * validation is authoritative, and a registry deployed from a newer contract
- * build could enforce different bounds than a given SDK release knows about.
+ * Every value here mirrors `contracts/keeper-registry/src/constants.rs`'s Rust
+ * original and is only ever a fast local pre-check: the deployed contract
+ * remains authoritative. A copy that has drifted low rejects calls the chain
+ * would have accepted; a copy that has drifted high just costs a round trip.
+ * Neither can make an invalid call succeed.
  *
- * Following CONTRIBUTING.md's rule for the contract — a value enforced in
- * more than one place gets a name in exactly one place — every bound the
- * SDK checks is named here rather than inlined at its call site.
+ * Keeping them in sync is tied to the contract's `VERSION`: when the contract
+ * bumps `VERSION`, these constants and {@link SUPPORTED_CONTRACT_VERSIONS} are
+ * reviewed in the same SDK release. See the versioning policy (backlog issue
+ * 0192) for the release-mapping rules.
  */
 
-/** Maximum `calldata` length, in bytes. Mirrors `MAX_CALLDATA_LEN`. */
+/**
+ * Contract `VERSION` values this SDK release was built against, inclusive.
+ *
+ * `min` is the oldest deployment whose ABI this SDK still speaks; `max` is the
+ * newest it has been tested against. A deployment reporting a version outside
+ * this range is not refused -- see `client.version()`, which warns rather than
+ * throwing, because a newer contract is usually additive and an SDK that
+ * hard-fails on it strands every integrator until they can upgrade.
+ */
+export const SUPPORTED_CONTRACT_VERSIONS = {
+  min: 1,
+  max: 3,
+} as const;
+/** Maximum `proof` length in bytes accepted by `execute_task`. */
+export const MAX_PROOF_LEN = 256;
+
+// ── Task parameter bounds, mirrored from `constants.rs` ──────────────────────
+//
+// `register_task` validates each of these on-chain (`validate_task_params` in
+// `internal.rs`). They are named here so the client-side pre-check in
+// `methods/registerTask.ts` and any future caller share one copy, per the same
+// rule the contract follows: a value enforced in more than one place gets a
+// name in exactly one place.
+
+/** Maximum `calldata` length in bytes accepted by `register_task`. */
 export const MAX_CALLDATA_LEN = 1024;
 
-/** Minimum `lock_ledgers` a task may be registered with. Mirrors `MIN_LOCK_LEDGERS` (~1 minute). */
+/** Smallest `lock_ledgers` a task may be registered with (~1 minute). */
 export const MIN_LOCK_LEDGERS = 12;
 
-/** Maximum `lock_ledgers` a task may be registered with. Mirrors `MAX_LOCK_LEDGERS` (~1 day). */
+/** Largest `lock_ledgers` a task may be registered with (~1 day). */
 export const MAX_LOCK_LEDGERS = 17_280;
 
-/** Minimum `ttl_ledgers` a task may be registered with. Mirrors `MIN_TTL_LEDGERS` (~83 minutes). */
+/** Smallest `ttl_ledgers` a task may be registered with (~83 minutes). */
 export const MIN_TTL_LEDGERS = 1_000;

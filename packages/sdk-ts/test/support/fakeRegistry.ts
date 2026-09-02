@@ -179,8 +179,6 @@ export class FakeRegistry implements RpcServerLike {
 
   private dispatch(method: string, args: unknown[]): void {
     switch (method) {
-      case "cancel_task":
-        return this.cancelTask(args[0] as string, args[1] as bigint);
       case "claim_task":
         return this.claimTask(args[0] as string, args[1] as bigint);
       default:
@@ -202,20 +200,6 @@ export class FakeRegistry implements RpcServerLike {
     task.status = TaskStatus.Claimed;
     task.claimer = keeper;
     task.claimLedger = this.ledgerSequence;
-  }
-
-  private cancelTask(owner: string, id: bigint): void {
-    const task = this.task(id);
-    if (task.owner !== owner) {
-      throw new ContractRejection(KeeperErrorCode.NotTaskOwner);
-    }
-    if (task.status === TaskStatus.Claimed && !this.lockExpired(task)) {
-      throw new ContractRejection(KeeperErrorCode.LockPeriodActive);
-    }
-    if (task.status !== TaskStatus.Pending && task.status !== TaskStatus.Claimed) {
-      throw new ContractRejection(KeeperErrorCode.InvalidTaskStatus);
-    }
-    task.status = TaskStatus.Cancelled;
   }
 
   /**

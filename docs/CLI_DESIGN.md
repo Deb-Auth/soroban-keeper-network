@@ -139,6 +139,36 @@ Commands that submit a transaction simulate it first and show the fee before
 submitting. `--yes` skips the confirmation prompt. Simulation-only commands
 never prompt.
 
+## Task commands
+
+**Calldata.** `skn task register` takes the call a keeper must make (a target
+contract, a function, and its arguments) and stores it as the task's calldata.
+The calldata is UTF-8 JSON, `{"contract": "C...", "function": "name", "args": [...]}`.
+The contract stores these bytes without reading them. A keeper that executes
+tasks must decode this same format. Calldata is limited to the SDK's
+`MAX_CALLDATA_LEN`.
+
+**Token units.** Rewards are stored in stroops. Human output shows token units
+at seven decimal places, which is how Stellar assets are denominated, and shows
+stroops next to it. `--json` shows stroops only.
+
+**Listing.** `skn task list` reads the indexer when `--indexer-url` or
+`SKN_INDEXER_URL` is set, and reads the chain otherwise. The indexer can list
+only by owner or by keeper, so with it a list needs `--owner` or `--keeper`. On
+the chain a keeper filter matches the task's current claimer. Past executions
+are history that only the indexer keeps. Every list states its source.
+
+**Pagination.** `--limit` takes 1 to 100 and defaults to 20. On the chain,
+`--cursor` is a task ID to resume at, and the output's `nextCursor` says where
+the next page starts. With the indexer, the cursor is an offset.
+
+**Fee estimate.** `task register` simulates the call and reports the resource
+fee the simulation returned. That figure excludes the network's base inclusion
+fee. Nothing is submitted until the person confirms, or `--yes` is passed.
+
+**Deadlines.** `--deadline` takes an ISO 8601 timestamp, or a duration from now:
+`+90s`, `+30m`, `+2h`, `+7d`.
+
 ## Testing
 
 Each command has a test that runs it end to end against the SDK's fake RPC,

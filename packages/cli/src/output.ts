@@ -18,6 +18,8 @@ export function ok(stdout: string): RunResult {
  */
 export function toJsonSafe(value: unknown): unknown {
   if (typeof value === "bigint") return value.toString();
+  // Bytes (such as a task's calldata) go out as base64, not as an index-keyed object.
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("base64");
   if (Array.isArray(value)) return value.map(toJsonSafe);
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
@@ -41,15 +43,17 @@ export function fail(
   code: string,
   message: string,
   json: boolean,
+  detail: Record<string, unknown> = {},
 ): RunResult {
   if (json) {
-    const body = { error: { code, message } };
+    const body = { error: { code, message, ...detail } };
     return { exitCode, stdout: `${JSON.stringify(body, null, 2)}\n`, stderr: "" };
   }
+  const hint = typeof detail["hint"] === "string" ? `hint: ${detail["hint"]}\n` : "";
   return {
     exitCode,
     stdout: "",
-    stderr: `skn: ${message}\nRun 'skn --help' for usage.\n`,
+    stderr: `skn: ${message}\n${hint || "Run 'skn --help' for usage.\n"}`,
   };
 }
 

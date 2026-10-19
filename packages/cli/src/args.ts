@@ -48,3 +48,23 @@ export function parseCommandArgs(
 export function loadConfig(context: CommandContext): Promise<ConfigFile | undefined> {
   return readConfig(context.configFile);
 }
+
+/** Maps parsed flags to the settings resolver's input. Shared by every command that needs settings. */
+export function settingFlagsFrom(values: ParsedValues): {
+  network?: string | undefined;
+  rpcUrl?: string | undefined;
+  contractId?: string | undefined;
+  profile?: string | undefined;
+  confirmMainnet?: boolean | undefined;
+} {
+  return {
+    network: values.network as string | undefined,
+    rpcUrl: values["rpc-url"] as string | undefined,
+    contractId: values["contract-id"] as string | undefined,
+    profile: values.profile as string | undefined,
+    confirmMainnet: values["confirm-mainnet"] === true,
+  };
+}
+
+/** A problem with the command line itself: a bad argument or a missing required value. Exits 2. */
+export class UsageError extends Error {}

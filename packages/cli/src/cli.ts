@@ -1,18 +1,15 @@
 import { homedir } from "node:os";
-import {
-  KeeperContractError,
-  KeeperRpcError,
-  SUPPORTED_CONTRACT_VERSIONS,
-  type RpcServerLike,
-} from "@soroban-keeper-network/sdk";
-import { ConfigError, configPath } from "./config.js";
+import { SUPPORTED_CONTRACT_VERSIONS, type RpcServerLike } from "@soroban-keeper-network/sdk";
+import { configPath } from "./config.js";
 import { type CommandContext } from "./args.js";
 import { runConfigInit, runConfigShow } from "./commands/config.js";
 import { runInspectVersion } from "./commands/inspect.js";
-import { EXIT } from "./exitCodes.js";
-import { KeyError } from "./keys.js";
-import { fail, ok, usage, type RunResult } from "./output.js";
-import { SettingsError } from "./settings.js";
+import { runTaskList } from "./commands/task/list.js";
+import { runTaskRegister, type ConfirmFn } from "./commands/task/register.js";
+import { runTaskShow } from "./commands/task/show.js";
+import type { FetchLike } from "./indexer.js";
+import { ok, usage, type RunResult } from "./output.js";
+import { commandError } from "./failures.js";
 import { CLI_VERSION } from "./version.js";
 
 export type { RunResult } from "./output.js";
@@ -29,6 +26,12 @@ export interface RunOptions {
   homeDir?: string | undefined;
   /** Platform for the key-file permission check. Defaults to `process.platform`. */
   platform?: NodeJS.Platform | undefined;
+  /** HTTP client for the indexer. Defaults to the global `fetch`. */
+  fetch?: FetchLike | undefined;
+  /** Asks the person to confirm a transaction. The bin provides one when stdin is a terminal. */
+  confirm?: ConfirmFn | undefined;
+  /** Clock in Unix seconds, for deadline parsing. Defaults to the system clock. */
+  now?: (() => number) | undefined;
 }
 
 /** Command groups from `docs/CLI_DESIGN.md`. Each one appears in help, implemented or not. */
@@ -51,7 +54,7 @@ Usage:
 
 Command groups:
   config    init | show: manage the config file and named profiles
-  task      register, show, list, claim and execute tasks (not implemented yet)
+  task      register, show, list (claim and execute: not implemented yet)
   keeper    keeper balance and withdrawal (not implemented yet)
   admin     admin controls (not implemented yet)
   batch     batch task registration (not implemented yet)
@@ -112,6 +115,13 @@ export async function run(argv: readonly string[], options: RunOptions = {}): Pr
     if (first === "config" && second === "init") return await runConfigInit(rest, context);
     if (first === "config" && second === "show") return await runConfigShow(rest, context);
     if (first === "inspect" && second === "version") return await runInspectVersion(rest, context);
+    if (first === "task" && second === "show") return await runTaskShow(rest, context);
+    if (first === "task" && second === "list") {
+      return await runTaskList(rest, context, { fetch: options.fetch, now: options.now });
+    }
+    if (first === "task" && second === "register") {
+      return await runTaskRegister(rest, context, { confirm: options.confirm, now: options.now });
+    }
   } catch (err) {
     return commandError(err, json);
   }
@@ -124,35 +134,4 @@ export async function run(argv: readonly string[], options: RunOptions = {}): Pr
 
 function isCommandGroup(value: string): value is (typeof COMMAND_GROUPS)[number] {
   return (COMMAND_GROUPS as readonly string[]).includes(value);
-}
-
-/**
- * The one place an error becomes an exit code. Usage, config, settings and key
- * problems are user input (code 2). RPC and contract errors keep their own codes.
- */
-export function commandError(err: unknown, json: boolean): RunResult {
-  if (err instanceof KeeperRpcError) {
-    return fail(EXIT.rpc, "RPC_ERROR", err.message, json);
-  }
-  if (err instanceof KeeperContractError) {
-    return fail(EXIT.contract, "CONTRACT_ERROR", err.message, json);
-  }
-  if (err instanceof ConfigError || err instanceof SettingsError || err instanceof KeyError) {
-    return usage(err.message, json);
-  }
-  if (isParseError(err)) {
-    return usage(err.message, json);
-  }
-  return fail(EXIT.internal, "INTERNAL_ERROR", err instanceof Error ? err.message : String(err), json);
-}
-
-const PARSE_ERROR_CODES = new Set([
-  "ERR_PARSE_ARGS_UNKNOWN_OPTION",
-  "ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
-  "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL",
-]);
-
-/** Node's `parseArgs` reports unknown or malformed flags with one of these codes. */
-function isParseError(err: unknown): err is Error {
-  return err instanceof Error && PARSE_ERROR_CODES.has((err as { code?: string }).code ?? "");
 }

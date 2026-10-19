@@ -120,10 +120,10 @@ describe("usage errors", () => {
   });
 
   it("exits 2 for a command whose group exists but is not implemented yet", async () => {
-    const result = await run(["task", "register"]);
+    const result = await run(["keeper", "balance"]);
 
     expect(result.exitCode).toBe(EXIT.usage);
-    expect(result.stderr).toContain("'skn task register' is not implemented yet");
+    expect(result.stderr).toContain("'skn keeper balance' is not implemented yet");
   });
 
   it("exits 2 when --contract-id is missing", async () => {

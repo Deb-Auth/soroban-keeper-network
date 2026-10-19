@@ -15,9 +15,13 @@ This package is built on [`@soroban-keeper-network/sdk`](../sdk-ts).
   profiles. `skn config show` prints the effective settings.
 - `skn inspect version` prints the deployed contract's VERSION and whether
   this CLI supports it.
+- `skn task show <id>` prints one task. `--json` returns its raw fields.
+- `skn task list` filters tasks by status, owner or keeper, one page at a time.
+- `skn task register` simulates a task, shows the fee, and submits after you
+  confirm, or with `--yes`.
 
-The other command groups appear in help and exit with code `2` until their
-issues land.
+`task claim`, `task execute`, and the other command groups appear in help and
+exit with code `2` until their issues land.
 
 ## Configuration
 
@@ -43,6 +47,20 @@ The key is read from the first source that is set, in this order:
 
 No command prints a key. Errors name the source but never its contents.
 
+## Tasks
+
+```bash
+skn task show 7 [--json]
+skn task list --status pending --limit 20 [--cursor <id>] [--owner G...] [--keeper G...] [--indexer-url <url>]
+skn task register --target C... --function liquidate --args '["G...", 5]' \
+  --reward 5000000 --deadline +2h [--verifier C...] [--task-type custom] [--yes]
+# or read the same fields from a file: skn task register --from task.json
+```
+
+The call is stored as UTF-8 JSON, `{"contract", "function", "args"}`, which
+keepers must decode. The design doc (Task commands) covers the format, the
+indexer's limits, and the fee estimate.
+
 ## Usage
 
 ```bash
@@ -56,7 +74,7 @@ Every command accepts `--json`. The output is one JSON document on stdout.
 Integer fields that can exceed JavaScript's safe range, such as token amounts,
 are decimal strings. A failing command with `--json` prints
 `{ "error": { "code": ..., "message": ... } }` on stdout. Without `--json`, the
-error goes to stderr.
+error goes to stderr. A contract error adds the error's name and a hint.
 
 ## Exit codes
 
@@ -65,9 +83,9 @@ error goes to stderr.
 | `0` | Success. |
 | `1` | Unexpected internal failure. |
 | `2` | Usage error: bad flags, unknown command or profile, a missing or invalid key or config, or a command that is not implemented yet. |
-| `3` | RPC or network error. |
-| `4` | The contract rejected the call. |
-| `5` | Not found. |
+| `3` | RPC or network error, including an unreachable indexer. |
+| `4` | The contract rejected the call. The output names the error and says what to do. |
+| `5` | Not found: no task has that ID. |
 
 ## Development
 

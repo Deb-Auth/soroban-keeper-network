@@ -59,8 +59,10 @@ prints the effective values.
 
 ## Configuration
 
-Config is a single file, `skn.config.json`, in the user's config directory
-(or the path in `SKN_CONFIG`). It holds named profiles:
+Config is a single file. It is read from `SKN_CONFIG` if that is set, otherwise
+from `~/.config/skn/skn.config.json`. A missing file is fine: commands fall back
+to flags and defaults. A file that exists but is malformed is an error. It holds
+named profiles:
 
 ```json
 {
@@ -77,7 +79,7 @@ Profiles never store secrets. Key material comes only from the key sources
 below.
 
 Mainnet commands that send transactions require an explicit confirmation flag,
-`--confirm-mainnet`.
+`--confirm-mainnet`. `config show` reports the flag's value so a script can check it.
 
 ## Keys
 
@@ -85,9 +87,13 @@ Keys are supplied by one of three sources, never as a bare command-line
 argument, because argv is visible to other processes:
 
 1. An environment variable, `SKN_SECRET_KEY`.
-2. A key file, `--key-file <path>`. The file must not be readable by other
-   users. A file with broader permissions is refused with a clear message.
-3. The Stellar CLI's identity store, `--identity <name>`.
+2. A key file, `--key-file <path>`. On POSIX systems the file must not be readable
+   by other users, and a file with broader permissions is refused. Windows has no
+   POSIX permission bits, so the check does not apply there; keep the file in a
+   directory only your account can read.
+3. The Stellar CLI's identity store, `--identity <name>`, read from
+   `~/.config/stellar/identity/<name>.toml`. Seed-phrase identities are not
+   supported yet.
 
 When more than one source is set, the precedence is `--key-file`, then
 `--identity`, then `SKN_SECRET_KEY`. The precedence is documented in the
